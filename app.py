@@ -441,12 +441,18 @@ def deploy_for_user(token_id: str, token_secret: str) -> Tuple[str, str, str]:
 
 # Create simplified single-page Gradio interface
 with gr.Blocks(title="FluxFoundry LoRA Training", theme=gr.themes.Soft()) as app:
-    gr.Markdown("""
+    gr.Markdown(
+        """
     # 🎨 FluxFoundry LoRA Training
     
     Train custom LoRA models for Flux image generation and check training status.
-    """)
-    
+                
+    # ⚠️ SEE [DEMO VIDEO](https://www.loom.com/share/ed054eb997024730b129d8d7f48981d9)
+                
+    [Installation instruction](https://github.com/stillerman/fluxfoundry)
+    """
+    )
+
     # Deployment Section
     gr.Markdown("## 🚀 Deploy Your Modal Endpoint")
     gr.Markdown("""
@@ -456,7 +462,7 @@ with gr.Blocks(title="FluxFoundry LoRA Training", theme=gr.themes.Soft()) as app
     - Modal account and API key
     - The `diffusers_lora_finetune.py` script in your current directory
     """)
-    
+
     with gr.Row():
         with gr.Column():
             token_id = gr.Textbox(
@@ -471,12 +477,12 @@ with gr.Blocks(title="FluxFoundry LoRA Training", theme=gr.themes.Soft()) as app
                 type="password",
                 info="Your Modal token secret"
             )
-        
+
         with gr.Column():
             deploy_btn = gr.Button("🚀 Deploy Endpoint", variant="primary", size="lg")
-    
+
     deploy_status = gr.Markdown(label="Deployment Status")
-    
+
     with gr.Row():
         with gr.Column():
             deploy_stdout = gr.Textbox(
@@ -494,21 +500,21 @@ with gr.Blocks(title="FluxFoundry LoRA Training", theme=gr.themes.Soft()) as app
                 interactive=False,
                 info="Error output (if any)"
             )
-    
+
     deploy_btn.click(
         fn=deploy_for_user,
         inputs=[token_id, token_secret],
         outputs=[deploy_status, deploy_stdout, deploy_stderr]
     )
-    
+
     gr.Markdown("---")
-    
+
     # Model Access Check Section
     gr.Markdown("## 🔒 Check Model Access")
     gr.Markdown("""
     Before training, verify that your HuggingFace token has access to the gated FLUX.1-dev model.
     """)
-    
+
     with gr.Row():
         with gr.Column():
             hf_token_check = gr.Textbox(
@@ -519,21 +525,21 @@ with gr.Blocks(title="FluxFoundry LoRA Training", theme=gr.themes.Soft()) as app
             )
         with gr.Column():
             check_access_btn = gr.Button("🔍 Check Access", variant="secondary", size="lg")
-    
+
     access_status = gr.Markdown(label="Access Status")
-    
+
     check_access_btn.click(
         fn=check_model_access,
         inputs=[hf_token_check],
         outputs=[access_status]
     )
-    
+
     gr.Markdown("---")
-    
+
     # Training Section
     gr.Markdown("## 🎯 Start Training")
     gr.Markdown("After deploying your endpoint above, use it to train LoRA models.")
-    
+
     with gr.Row():
         with gr.Column():
             dataset_id = gr.Textbox(
@@ -557,8 +563,7 @@ with gr.Blocks(title="FluxFoundry LoRA Training", theme=gr.themes.Soft()) as app
                 placeholder="https://modal-app-url-api-start-training.modal.run",
                 info="Modal API endpoint for starting training"
             )
-                
-        
+
         with gr.Column():
             instance_name = gr.Textbox(
                 label="Instance Name (Optional)",
@@ -578,9 +583,9 @@ with gr.Blocks(title="FluxFoundry LoRA Training", theme=gr.themes.Soft()) as app
                 label="Max Training Steps",
                 info="Number of training steps (more steps = longer training)"
             )
-    
+
     start_btn = gr.Button("🚀 Start Training", variant="primary", size="lg")
-    
+
     with gr.Row():
         training_output = gr.Markdown(label="Training Status")
         job_id_output = gr.Textbox(
@@ -588,16 +593,16 @@ with gr.Blocks(title="FluxFoundry LoRA Training", theme=gr.themes.Soft()) as app
             placeholder="Copy this ID to check status",
             interactive=False
         )
-    
+
     start_btn.click(
         fn=start_training,
         inputs=[dataset_id, hf_token, output_repo, start_training_url, instance_name, class_name, max_train_steps],
         outputs=[training_output, job_id_output]
     )
-    
+
     # Status Section
     gr.Markdown("## 📊 Check Status")
-    
+
     job_id_input = gr.Textbox(
         label="Job ID",
         placeholder="Paste your job ID here",
@@ -608,12 +613,12 @@ with gr.Blocks(title="FluxFoundry LoRA Training", theme=gr.themes.Soft()) as app
         placeholder="https://modal-app-url-api-job-status.modal.run",
         info="Modal API endpoint for checking job status"
     )
-    
+
     with gr.Row():
         status_btn = gr.Button("📊 Check Status", variant="secondary")
-    
+
     status_output = gr.Markdown(label="Job Status")
-    
+
     # Add gallery component for displaying all generated images
     generated_images = gr.Gallery(
         label="Generated Images",
@@ -624,7 +629,7 @@ with gr.Blocks(title="FluxFoundry LoRA Training", theme=gr.themes.Soft()) as app
         rows=2,
         height="auto"
     )
-    
+
     status_btn.click(
         fn=check_job_status,
         inputs=[job_id_input, job_status_url],
@@ -632,11 +637,11 @@ with gr.Blocks(title="FluxFoundry LoRA Training", theme=gr.themes.Soft()) as app
     )
 
     gr.Markdown("---")
-    
+
     # Image Generation Section
     gr.Markdown("## 🎨 Generate Images")
     gr.Markdown("Use your trained LoRA model to generate images from prompts.")
-    
+
     with gr.Row():
         with gr.Column():
             prompts_json = gr.Textbox(
@@ -650,7 +655,7 @@ with gr.Blocks(title="FluxFoundry LoRA Training", theme=gr.themes.Soft()) as app
                 placeholder="username/my-lora-model",
                 info="HuggingFace repository containing your trained LoRA"
             )
-        
+
         with gr.Column():
             hf_token_gen = gr.Textbox(
                 label="HuggingFace Token",
@@ -663,9 +668,9 @@ with gr.Blocks(title="FluxFoundry LoRA Training", theme=gr.themes.Soft()) as app
                 placeholder="https://modal-app-url-api-generate-images.modal.run",
                 info="Modal API endpoint for image generation"
             )
-    
+
     generate_btn = gr.Button("🎨 Generate Images", variant="primary", size="lg")
-    
+
     with gr.Row():
         generation_output = gr.Markdown(label="Generation Status")
         generation_job_id_output = gr.Textbox(
@@ -673,7 +678,7 @@ with gr.Blocks(title="FluxFoundry LoRA Training", theme=gr.themes.Soft()) as app
             placeholder="Copy this ID to check status",
             interactive=False
         )
-    
+
     generate_btn.click(
         fn=generate_images,
         inputs=[prompts_json, lora_repo, hf_token_gen, generate_images_url],
