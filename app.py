@@ -103,7 +103,7 @@ def start_training(
     except json.JSONDecodeError:
         return "❌ Error: Invalid response from server", ""
 
-def check_job_status(job_id: str, job_status_url: str) -> tuple[str, Optional[Image.Image]]:
+def check_job_status(job_id: str, job_status_url: str) -> tuple[str, List[Image.Image]]:
     """
     Check the current status of a LoRA training job or image generation job.
 
@@ -112,14 +112,17 @@ def check_job_status(job_id: str, job_status_url: str) -> tuple[str, Optional[Im
     Note that if we are invoking this function with MCP, the user cannot neccecarily see the images
     in the tool call, so you will have to render them again in the chat.
 
+    **MCP Client Limitation:** Due to MCP client constraints, we cannot render a gallery of images in the chat.
+    The MCP client should render these URLs as clickable markdown links when possible.
+
     Parameters:
     - job_id (str, required): The unique job identifier returned from start_training or generate_images function
     - job_status_url (str, required): Modal API endpoint for checking job status, format: "https://modal-app-url-api-job-status.modal.run". If the app is already deployed, this can be found in the Modal [dashboard](https://modal.com/apps/) . Otherwise, the app can get deployed with the deploy_for_user function.
 
     Returns:
-    - tuple[str, Optional[Image.Image]]: (status_message, first_image)
+    - tuple[str, List[Image.Image]]: (status_message, all_images)
       - status_message: Detailed status message containing job information
-      - first_image: First PIL Image object if images are available, None otherwise
+      - all_images: List of PIL Image objects if images are available, empty list otherwise
 
     Possible status values:
     - "completed": Job finished successfully
@@ -132,7 +135,7 @@ def check_job_status(job_id: str, job_status_url: str) -> tuple[str, Optional[Im
     """
 
     if not job_id or not job_id.strip():
-        return "❌ Error: Job ID is required", None
+        return "❌ Error: Job ID is required", []
 
     try:
         response = requests.get(
@@ -156,37 +159,34 @@ def check_job_status(job_id: str, job_status_url: str) -> tuple[str, Optional[Im
                         message += f"**Message:** {training_result.get('message', 'Generation finished')}\n"
                         if training_result.get('lora_repo'):
                             message += f"**LoRA Used:** {training_result['lora_repo']}\n"
-                        
+
                         images_data = training_result.get('images', [])
-                        first_image = None
-                        
+                        all_images = []
+
                         if images_data:
                             message += f"**Images Generated:** {len(images_data)}\n\n"
-                            
+
                             # Show all prompts
                             message += "**Generated Images:**\n"
                             for i, img_data in enumerate(images_data):
                                 prompt = img_data.get('prompt', f'Image {i+1}')
                                 message += f"**{i+1}.** {prompt}\n"
-                            
-                            # But only decode and return the first image
-                            if len(images_data) > 0:
-                                first_img_data = images_data[0]
-                                base64_data = first_img_data.get('image', '')
-                                first_prompt = first_img_data.get('prompt', 'Image 1')
-                                
+
+                            # Decode and return all images
+                            for i, img_data in enumerate(images_data):
+                                base64_data = img_data.get('image', '')
                                 if base64_data:
                                     try:
                                         image_bytes = base64.b64decode(base64_data)
-                                        first_image = Image.open(BytesIO(image_bytes))
-                                        message += f"\n**Displaying first image:** {first_prompt}"
-                                        if len(images_data) > 1:
-                                            message += f"\n*({len(images_data) - 1} additional images were generated but not displayed)*"
+                                        image = Image.open(BytesIO(image_bytes))
+                                        all_images.append(image)
                                     except Exception as e:
-                                        print(f"Error decoding first image: {e}")
-                                        message += f"\n**Error loading first image:** {e}"
-                        
-                        return message, first_image
+                                        print(f"Error decoding image {i+1}: {e}")
+                                        message += f"\n**Error loading image {i+1}:** {e}"
+
+                            message += f"\n**Displaying all {len(all_images)} generated images**"
+
+                        return message, all_images
                     else:
                         # Training job
                         message = "🎉 **Training Completed!**\n\n"
@@ -198,35 +198,35 @@ def check_job_status(job_id: str, job_status_url: str) -> tuple[str, Optional[Im
                             message += f"**Training Steps:** {training_result['training_steps']}\n"
                         if training_result.get('training_prompt'):
                             message += f"**Training Prompt:** {training_result['training_prompt']}\n"
-                        return message, None
+                        return message, []
                 else:
                     message = "🎉 **Job Completed!**\n\n"
                     message += f"**Result:** {training_result}"
-                    return message, None
+                    return message, []
 
             elif status == "running":
-                return f"🔄 **Job in Progress**\n\nThe job is still running. Check back in a few minutes.", None
+                return f"🔄 **Job in Progress**\n\nThe job is still running. Check back in a few minutes.", []
 
             elif status == "failed":
                 error_msg = result.get("message", "Job failed with unknown error")
-                return f"❌ **Job Failed**\n\n**Error:** {error_msg}", None
+                return f"❌ **Job Failed**\n\n**Error:** {error_msg}", []
 
             elif status == "error":
                 error_msg = result.get("message", "Unknown error occurred")
-                return f"❌ **Error**\n\n**Message:** {error_msg}", None
+                return f"❌ **Error**\n\n**Message:** {error_msg}", []
 
             else:
-                return f"❓ **Unknown Status**\n\n**Status:** {status}\n**Response:** {json.dumps(result, indent=2)}", None
+                return f"❓ **Unknown Status**\n\n**Status:** {status}\n**Response:** {json.dumps(result, indent=2)}", []
 
         else:
-            return f"❌ HTTP Error {response.status_code}: {response.text}", None
+            return f"❌ HTTP Error {response.status_code}: {response.text}", []
 
     except requests.exceptions.Timeout:
-        return "❌ Error: Request timed out", None
+        return "❌ Error: Request timed out", []
     except requests.exceptions.RequestException as e:
-        return f"❌ Error: Failed to connect to status service: {str(e)}", None
+        return f"❌ Error: Failed to connect to status service: {str(e)}", []
     except json.JSONDecodeError:
-        return "❌ Error: Invalid response from server", None
+        return "❌ Error: Invalid response from server", []
 
 def generate_images(
     prompts_json: str,
@@ -614,18 +614,21 @@ with gr.Blocks(title="FluxFoundry LoRA Training", theme=gr.themes.Soft()) as app
     
     status_output = gr.Markdown(label="Job Status")
     
-    # Add single image component for displaying the first generated image
-    generated_image = gr.Image(
-        label="First Generated Image",
+    # Add gallery component for displaying all generated images
+    generated_images = gr.Gallery(
+        label="Generated Images",
         show_label=True,
         interactive=False,
-        visible=True
+        visible=True,
+        columns=2,
+        rows=2,
+        height="auto"
     )
     
     status_btn.click(
         fn=check_job_status,
         inputs=[job_id_input, job_status_url],
-        outputs=[status_output, generated_image]
+        outputs=[status_output, generated_images]
     )
 
     gr.Markdown("---")
