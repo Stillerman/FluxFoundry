@@ -102,26 +102,27 @@ def start_training(
 
 def check_job_status(job_id: str, job_status_url: str) -> str:
     """
-    Check the current status of a LoRA training job.
+    Check the current status of a LoRA training job or image generation job.
 
     This function queries the Modal API to get the current status of a training job
     using its unique job ID. It returns detailed information about the job progress.
 
     Parameters:
-    - job_id (str, required): The unique job identifier returned from start_training function
+    - job_id (str, required): The unique job identifier returned from start_training or generate_images function
     - job_status_url (str, required): Modal API endpoint for checking job status, format: "https://modal-app-url-api-job-status.modal.run". If the app is already deployed, this can be found in the Modal [dashboard](https://modal.com/apps/) . Otherwise, the app can get deployed with the deploy_for_user function.
 
     Returns:
     - str: Detailed status message containing:
       - Job status (completed, running, failed, error)
       - Training results if completed (dataset used, steps completed, training prompt)
+      - Image generation results if completed (generated images info)
       - Error messages if failed
       - Progress information if still running
 
     Possible status values:
-    - "completed": Training finished successfully, LoRA model is ready
-    - "running": Training is still in progress
-    - "failed": Training failed due to an error
+    - "completed": Job finished successfully
+    - "running": Job is still in progress
+    - "failed": Job failed due to an error
     - "error": System error occurred
 
     Example usage:
@@ -143,27 +144,51 @@ def check_job_status(job_id: str, job_status_url: str) -> str:
             status = result.get("status", "unknown")
 
             if status == "completed":
-                message = "🎉 **Training Completed!**\n\n"
                 training_result = result.get("result", {})
                 if isinstance(training_result, dict):
-                    message += f"**Status:** {training_result.get('status', 'completed')}\n"
-                    message += f"**Message:** {training_result.get('message', 'Training finished')}\n"
-                    if training_result.get('dataset_used'):
-                        message += f"**Dataset Used:** {training_result['dataset_used']}\n"
-                    if training_result.get('training_steps'):
-                        message += f"**Training Steps:** {training_result['training_steps']}\n"
-                    if training_result.get('training_prompt'):
-                        message += f"**Training Prompt:** {training_result['training_prompt']}\n"
+                    # Check if this is an image generation job or training job
+                    if "images" in training_result:
+                        # Image generation job
+                        message = "🎉 **Image Generation Completed!**\n\n"
+                        message += f"**Status:** {training_result.get('status', 'completed')}\n"
+                        message += f"**Message:** {training_result.get('message', 'Generation finished')}\n"
+                        if training_result.get('lora_repo'):
+                            message += f"**LoRA Used:** {training_result['lora_repo']}\n"
+                        
+                        images = training_result.get('images', [])
+                        if images:
+                            message += f"**Images Generated:** {len(images)}\n\n"
+                            message += "**Generated Images:**\n"
+                            for i, img_data in enumerate(images[:5]):  # Show first 5 prompts
+                                prompt = img_data.get('prompt', f'Image {i+1}')
+                                message += f"- {prompt}\n"
+                            if len(images) > 5:
+                                message += f"... and {len(images) - 5} more images\n"
+                            message += "\n**Note:** Images are generated as base64 data. Use the API directly to retrieve them."
+                        return message
+                    else:
+                        # Training job
+                        message = "🎉 **Training Completed!**\n\n"
+                        message += f"**Status:** {training_result.get('status', 'completed')}\n"
+                        message += f"**Message:** {training_result.get('message', 'Training finished')}\n"
+                        if training_result.get('dataset_used'):
+                            message += f"**Dataset Used:** {training_result['dataset_used']}\n"
+                        if training_result.get('training_steps'):
+                            message += f"**Training Steps:** {training_result['training_steps']}\n"
+                        if training_result.get('training_prompt'):
+                            message += f"**Training Prompt:** {training_result['training_prompt']}\n"
+                        return message
                 else:
+                    message = "🎉 **Job Completed!**\n\n"
                     message += f"**Result:** {training_result}"
-                return message
+                    return message
 
             elif status == "running":
-                return f"🔄 **Training in Progress**\n\nThe training job is still running. Check back in a few minutes."
+                return f"🔄 **Job in Progress**\n\nThe job is still running. Check back in a few minutes."
 
             elif status == "failed":
-                error_msg = result.get("message", "Training failed with unknown error")
-                return f"❌ **Training Failed**\n\n**Error:** {error_msg}"
+                error_msg = result.get("message", "Job failed with unknown error")
+                return f"❌ **Job Failed**\n\n**Error:** {error_msg}"
 
             elif status == "error":
                 error_msg = result.get("message", "Unknown error occurred")
@@ -181,6 +206,90 @@ def check_job_status(job_id: str, job_status_url: str) -> str:
         return f"❌ Error: Failed to connect to status service: {str(e)}"
     except json.JSONDecodeError:
         return "❌ Error: Invalid response from server"
+
+def generate_images(
+    prompts_json: str,
+    lora_repo: str,
+    hf_token: str,
+    generate_images_url: str
+) -> tuple[str, str]:
+    """
+    Generate images using a trained LoRA model.
+
+    This function sends a request to generate images using a previously trained LoRA model.
+    It takes a list of prompts and generates images for each one.
+
+    Parameters:
+    - prompts_json (str, required): JSON string containing list of prompts, e.g. '["prompt1", "prompt2"]'
+    - lora_repo (str, required): HuggingFace repository containing the trained LoRA, format: "username/lora-name"
+    - hf_token (str, required): HuggingFace access token with read permissions, format: "hf_xxxxxxxxxxxx"
+    - generate_images_url (str, required): Modal API endpoint for generating images, format: "https://modal-app-url-api-generate-images.modal.run"
+
+    Returns:
+    - tuple[str, str]: (status_message, job_id)
+      - status_message: Human-readable status with generation details or error message
+      - job_id: Unique identifier for the generation job, empty string if failed
+
+    Example usage:
+    status, job_id = generate_images(
+        prompts_json='["a photo of a dog", "a photo of a cat"]',
+        lora_repo="myuser/my-dog-lora",
+        hf_token="hf_abcdef123456",
+        generate_images_url="https://modal-app-url-api-generate-images.modal.run"
+    )
+    """
+
+    if not prompts_json or not lora_repo or not hf_token or not generate_images_url:
+        return "❌ Error: All fields are required", ""
+
+    try:
+        # Parse the prompts JSON
+        prompts = json.loads(prompts_json.strip())
+        if not isinstance(prompts, list) or len(prompts) == 0:
+            return "❌ Error: Prompts must be a non-empty JSON list", ""
+    except json.JSONDecodeError as e:
+        return f"❌ Error: Invalid JSON format: {str(e)}", ""
+
+    payload = {
+        "hf_token": hf_token,
+        "lora_repo": lora_repo,
+        "prompts": prompts,
+        "num_inference_steps": 30,  # Fixed at 30
+        "guidance_scale": 7.5,      # Default value
+        "width": 512,               # Default value
+        "height": 512               # Default value
+    }
+
+    try:
+        response = requests.post(
+            generate_images_url,
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=30
+        )
+
+        if response.status_code == 200:
+            result = response.json()
+            if result.get("status") == "started":
+                job_id = result.get("job_id", "")
+                message = f"✅ Image generation started successfully!\n\n"
+                message += f"**Job ID:** `{job_id}`\n"
+                message += f"**LoRA Model:** {lora_repo}\n"
+                message += f"**Number of Prompts:** {len(prompts)}\n"
+                message += f"**Inference Steps:** 30\n\n"
+                message += "Copy the Job ID to check status below."
+                return message, job_id
+            else:
+                return f"❌ Error: {result.get('message', 'Unknown error')}", ""
+        else:
+            return f"❌ HTTP Error {response.status_code}: {response.text}", ""
+
+    except requests.exceptions.Timeout:
+        return "❌ Error: Request timed out. The service might be starting up.", ""
+    except requests.exceptions.RequestException as e:
+        return f"❌ Error: Failed to connect to generation service: {str(e)}", ""
+    except json.JSONDecodeError:
+        return "❌ Error: Invalid response from server", ""
 
 def deploy_for_user(token_id: str, token_secret: str) -> Tuple[str, str, str]:
     """
@@ -402,6 +511,54 @@ with gr.Blocks(title="FluxFoundry LoRA Training", theme=gr.themes.Soft()) as app
         outputs=[status_output]
     )
 
+    gr.Markdown("---")
+    
+    # Image Generation Section
+    gr.Markdown("## 🎨 Generate Images")
+    gr.Markdown("Use your trained LoRA model to generate images from prompts.")
+    
+    with gr.Row():
+        with gr.Column():
+            prompts_json = gr.Textbox(
+                label="Prompts (JSON List)",
+                placeholder='["a photo of a dog in a park", "a photo of a cat on a sofa"]',
+                lines=4,
+                info="JSON array of text prompts for image generation"
+            )
+            lora_repo = gr.Textbox(
+                label="LoRA Repository",
+                placeholder="username/my-lora-model",
+                info="HuggingFace repository containing your trained LoRA"
+            )
+        
+        with gr.Column():
+            hf_token_gen = gr.Textbox(
+                label="HuggingFace Token",
+                placeholder="hf_...",
+                type="password",
+                info="Your HuggingFace access token"
+            )
+            generate_images_url = gr.Textbox(
+                label="Generate Images URL",
+                placeholder="https://modal-app-url-api-generate-images.modal.run",
+                info="Modal API endpoint for image generation"
+            )
+    
+    generate_btn = gr.Button("🎨 Generate Images", variant="primary", size="lg")
+    
+    with gr.Row():
+        generation_output = gr.Markdown(label="Generation Status")
+        generation_job_id_output = gr.Textbox(
+            label="Generation Job ID",
+            placeholder="Copy this ID to check status",
+            interactive=False
+        )
+    
+    generate_btn.click(
+        fn=generate_images,
+        inputs=[prompts_json, lora_repo, hf_token_gen, generate_images_url],
+        outputs=[generation_output, generation_job_id_output]
+    )
 
 if __name__ == "__main__":
     print("🎨 Starting FluxFoundry Training Interface...")

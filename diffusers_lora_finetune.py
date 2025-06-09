@@ -262,7 +262,8 @@ def train_lora_stateless(
         create_repo(
             repo_id=output_repo,
             repo_type="model",
-            token=hf_token
+            token=hf_token,
+            exist_ok=True
         )
 
         # print contents of output_dir
@@ -398,4 +399,199 @@ def api_job_status(job_id: str):
         return {
             "status": "error",
             "message": f"Error checking job status: {str(e)}"
+        }
+
+@dataclass
+class InferenceConfig:
+    """Configuration for inference."""
+    num_inference_steps: int = 20
+    guidance_scale: float = 7.5
+    width: int = 512
+    height: int = 512
+
+
+@app.function(
+    image=image,
+    gpu="A100",  # Inference requires GPU
+    timeout=1800,  # 30 minutes
+)
+def generate_images_stateless(
+    hf_token: str,
+    lora_repo: str,
+    prompts: list[str],
+    num_inference_steps: int = 20,
+    guidance_scale: float = 7.5,
+    width: int = 512,
+    height: int = 512,
+):
+    """
+    Stateless function to generate images using a LoRA from HuggingFace.
+    
+    Args:
+        hf_token: HuggingFace API token
+        lora_repo: HuggingFace repository containing the LoRA (e.g., "username/my-lora")
+        prompts: List of text prompts to generate images for
+        num_inference_steps: Number of denoising steps
+        guidance_scale: Classifier-free guidance scale
+        width: Image width
+        height: Image height
+    
+    Returns:
+        Dictionary with status and list of generated images (as base64 strings)
+    """
+    import base64
+    import io
+    import tempfile
+    from pathlib import Path
+    
+    import torch
+    from diffusers import DiffusionPipeline
+    from huggingface_hub import snapshot_download, login
+    
+    try:
+        # Login to HuggingFace
+        login(token=hf_token)
+        
+        # Create temporary directory for model
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            model_dir = temp_path / "model"
+            lora_dir = temp_path / "lora"
+            
+            print("📥 Downloading base model...")
+            # Download base model
+            snapshot_download(
+                "black-forest-labs/FLUX.1-dev",
+                local_dir=str(model_dir),
+                ignore_patterns=["*.pt", "*.bin"],  # using safetensors
+                token=hf_token
+            )
+            
+            print(f"📥 Downloading LoRA from {lora_repo}...")
+            # Download LoRA
+            snapshot_download(
+                lora_repo,
+                local_dir=str(lora_dir),
+                token=hf_token
+            )
+            
+            print("🔄 Loading pipeline...")
+            # Load the diffusion pipeline
+            pipe = DiffusionPipeline.from_pretrained(
+                str(model_dir),
+                torch_dtype=torch.bfloat16,
+            ).to("cuda")
+            
+            # Load LoRA weights
+            pipe.load_lora_weights(str(lora_dir))
+            
+            print(f"🎨 Generating {len(prompts)} images...")
+            generated_images = []
+            
+            # Generate images for each prompt
+            for i, prompt in enumerate(prompts):
+                print(f"  Generating image {i+1}/{len(prompts)}: {prompt[:50]}...")
+                
+                image = pipe(
+                    prompt,
+                    num_inference_steps=num_inference_steps,
+                    guidance_scale=guidance_scale,
+                    width=width,
+                    height=height,
+                ).images[0]
+                
+                # Convert PIL Image to base64 string
+                img_buffer = io.BytesIO()
+                image.save(img_buffer, format='PNG')
+                img_base64 = base64.b64encode(img_buffer.getvalue()).decode('utf-8')
+                
+                generated_images.append({
+                    "prompt": prompt,
+                    "image": img_base64
+                })
+            
+            print("✅ All images generated successfully!")
+            
+            return {
+                "status": "success",
+                "message": f"Generated {len(prompts)} images successfully",
+                "lora_repo": lora_repo,
+                "images": generated_images
+            }
+            
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to generate images: {str(e)}"
+        }
+
+
+@app.function(
+    image=image,
+    keep_warm=1,
+)
+@modal.fastapi_endpoint(method="POST")
+def api_generate_images(item: dict):
+    """
+    Generate images using a LoRA model.
+    
+    Expected JSON payload:
+    {
+        "hf_token": "hf_...",
+        "lora_repo": "username/my-lora",
+        "prompts": ["prompt1", "prompt2", ...],
+        "num_inference_steps": 20,  // optional
+        "guidance_scale": 7.5,      // optional
+        "width": 512,               // optional
+        "height": 512               // optional
+    }
+    """
+    try:
+        # Extract required parameters
+        hf_token = item["hf_token"]
+        lora_repo = item["lora_repo"] 
+        prompts = item["prompts"]
+        
+        if not isinstance(prompts, list) or len(prompts) == 0:
+            return {
+                "status": "error",
+                "message": "prompts must be a non-empty list"
+            }
+        
+        # Extract optional parameters
+        num_inference_steps = item.get("num_inference_steps", 20)
+        guidance_scale = item.get("guidance_scale", 7.5)
+        width = item.get("width", 512)
+        height = item.get("height", 512)
+        
+        # Start generation (non-blocking)
+        call_handle = generate_images_stateless.spawn(
+            hf_token=hf_token,
+            lora_repo=lora_repo,
+            prompts=prompts,
+            num_inference_steps=num_inference_steps,
+            guidance_scale=guidance_scale,
+            width=width,
+            height=height
+        )
+        
+        job_id = call_handle.object_id
+        
+        return {
+            "status": "started",
+            "job_id": job_id,
+            "message": "Image generation job started successfully",
+            "lora_repo": lora_repo,
+            "num_prompts": len(prompts)
+        }
+        
+    except KeyError as e:
+        return {
+            "status": "error",
+            "message": f"Missing required parameter: {e}"
+        }
+    except Exception as e:
+        return {
+            "status": "error", 
+            "message": f"Failed to start image generation: {str(e)}"
         }
