@@ -109,6 +109,8 @@ def check_job_status(job_id: str, job_status_url: str) -> tuple[str, Optional[Im
 
     This function queries the Modal API to get the current status of a training job
     using its unique job ID. It returns detailed information about the job progress.
+    Note that if we are invoking this function with MCP, the user cannot neccecarily see the images
+    in the tool call, so you will have to render them again in the chat.
 
     Parameters:
     - job_id (str, required): The unique job identifier returned from start_training or generate_images function
