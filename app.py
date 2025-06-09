@@ -291,9 +291,70 @@ def generate_images(
     except json.JSONDecodeError:
         return "❌ Error: Invalid response from server", ""
 
+def check_model_access(hf_token: str) -> str:
+    """
+    Check if the user has access to the gated FLUX.1-dev model.
+
+    This function verifies that the user's HuggingFace token has access to the 
+    gated FLUX.1-dev model required for LoRA training. This has to be done before we can deploy the endpoint.
+
+    Parameters:
+    - hf_token (str, required): HuggingFace access token, format: "hf_xxxxxxxxxxxx"
+
+    Returns:
+    - str: Status message indicating access status and next steps
+
+    Example usage:
+    status = check_model_access("hf_abcdef123456")
+    """
+    
+    if not hf_token or not hf_token.strip():
+        return "❌ Error: HuggingFace token is required"
+    
+    try:
+        # Try to import huggingface_hub - if not available, give instructions
+        try:
+            from huggingface_hub import HfApi
+        except ImportError:
+            return "❌ Error: huggingface_hub not installed. Please run: pip install huggingface_hub"
+        
+        # Initialize HF API with token
+        api = HfApi(token=hf_token.strip())
+        model_name = "black-forest-labs/FLUX.1-dev"
+        
+        try:
+            # Attempt to get repository info - this will fail if no access
+            repo_info = api.repo_info(repo_id=model_name, repo_type="model")
+            
+            message = "✅ **Access Confirmed!**\n\n"
+            message += f"You have access to the **{model_name}** model.\n"
+            message += "You can proceed with LoRA training."
+            return message
+            
+        except Exception as access_error:
+            # Check if it's specifically an access/permission error
+            error_str = str(access_error).lower()
+            if any(keyword in error_str for keyword in ["gated", "access", "permission", "401", "403", "repo_not_found"]):
+                message = "🔒 **Access Required**\n\n"
+                message += f"You don't have access to the gated **{model_name}** model.\n\n"
+                message += "**To gain access:**\n"
+                message += f"1. Visit: https://huggingface.co/{model_name}\n"
+                message += "2. Click **'Agree and access repository'**\n"
+                message += "3. Accept the license terms\n"
+                message += "4. Wait a few minutes for access to be granted\n"
+                message += "5. Come back and check access again\n\n"
+                message += "**Note:** You need to be logged into HuggingFace with the same account used to create your access token."
+                return message
+            else:
+                # Some other error occurred
+                return f"❌ **Error checking access**\n\nError details: {str(access_error)}"
+        
+    except Exception as e:
+        return f"❌ **Unexpected error**\n\nFailed to check model access: {str(e)}"
+
 def deploy_for_user(token_id: str, token_secret: str) -> Tuple[str, str, str]:
     """
-    Deploy a Modal endpoint for a user using their API key. Unless the user has already done this, its the first thing you must do in order to train a LoRA.
+    Deploy a Modal endpoint for a user using their API key. Unless the user has already done this, this must be done before they can train a LoRA.
     
     This function deploys a Modal script using the user's Modal API token ID and secret,
     allowing them to set up their own training endpoint. You can create them at https://modal.com/settings/tokens
@@ -417,6 +478,33 @@ with gr.Blocks(title="FluxFoundry LoRA Training", theme=gr.themes.Soft()) as app
         fn=deploy_for_user,
         inputs=[token_id, token_secret],
         outputs=[deploy_status, deploy_stdout, deploy_stderr]
+    )
+    
+    gr.Markdown("---")
+    
+    # Model Access Check Section
+    gr.Markdown("## 🔒 Check Model Access")
+    gr.Markdown("""
+    Before training, verify that your HuggingFace token has access to the gated FLUX.1-dev model.
+    """)
+    
+    with gr.Row():
+        with gr.Column():
+            hf_token_check = gr.Textbox(
+                label="HuggingFace Token",
+                placeholder="hf_...",
+                type="password",
+                info="Your HuggingFace access token"
+            )
+        with gr.Column():
+            check_access_btn = gr.Button("🔍 Check Access", variant="secondary", size="lg")
+    
+    access_status = gr.Markdown(label="Access Status")
+    
+    check_access_btn.click(
+        fn=check_model_access,
+        inputs=[hf_token_check],
+        outputs=[access_status]
     )
     
     gr.Markdown("---")
